@@ -9,6 +9,7 @@ import cloudscraper
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from flask import Flask, request
+import asyncio
 
 # ==========================
 # Конфіг
@@ -191,6 +192,9 @@ def build_message():
 app = Flask(__name__)
 tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+# 🔑 Ініціалізуємо Application вручну
+asyncio.get_event_loop().run_until_complete(tg_app.initialize())
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(build_message(), disable_web_page_preview=True)
@@ -207,7 +211,6 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    import asyncio
     asyncio.run(tg_app.process_update(update))
     return "OK", 200
 
@@ -215,7 +218,6 @@ def webhook():
 # Запуск на Render
 # ==========================
 if __name__ == "__main__":
-    import asyncio
     async def set_webhook():
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
     asyncio.get_event_loop().run_until_complete(set_webhook())
