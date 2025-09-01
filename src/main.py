@@ -204,13 +204,12 @@ tg_app.add_handler(CommandHandler("now", cmd_start))
 def home():
     return "Bot is running!", 200
 
-
 @app.route("/webhook", methods=["POST"])
-async def webhook():
+def webhook():
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    await tg_app.process_update(update)
+    import asyncio
+    asyncio.run(tg_app.process_update(update))
     return "OK", 200
-
 
 # ==========================
 # Запуск на Render
