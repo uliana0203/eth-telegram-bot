@@ -1,7 +1,7 @@
 import os
 import re
+import time
 import requests
-import logging
 from datetime import datetime
 from pytz import timezone
 from dotenv import load_dotenv
@@ -10,6 +10,7 @@ import cloudscraper
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from flask import Flask, request
+import asyncio
 
 # ==========================
 # Конфіг
@@ -22,8 +23,6 @@ KYIV_TZ = timezone("Europe/Kyiv")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Вкажи TELEGRAM_BOT_TOKEN у змінних середовища або .env")
-
-logging.basicConfig(level=logging.INFO)
 
 # ==========================
 # Утиліти
@@ -48,12 +47,19 @@ def pct_delta(new, old):
         return "N/A"
 
 # ==========================
-# CoinGecko
+# CoinGecko (з кешем)
 # ==========================
 CG_BASE = "https://api.coingecko.com/api/v3"
 HEADERS_JSON = {"accept": "application/json"}
 
+last_fetch = 0
+cache_data = None
+
 def get_eth_price_and_volume():
+    global last_fetch, cache_data
+    if time.time() - last_fetch < 60 and cache_data:
+        return cache_data
+
     r = requests.get(
         f"{CG_BASE}/coins/ethereum",
         params={"localization":"false","tickers":"false","market_data":"true",
@@ -76,7 +82,9 @@ def get_eth_price_and_volume():
     vol_prev = vols[-2][1] if len(vols) >= 2 else None
     vol_delta_pct = pct_delta(vol_24h, vol_prev)
 
-    return price, vol_24h, price_chg_pct, vol_delta_pct
+    cache_data = (price, vol_24h, price_chg_pct, vol_delta_pct)
+    last_fetch = time.time()
+    return cache_data
 
 # ==========================
 # Farside
@@ -207,22 +215,23 @@ tg_app.add_handler(CommandHandler("now", cmd_start))
 def home():
     return "Bot is running!", 200
 
+# Один глобальний loop
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    import asyncio
-    asyncio.run(tg_app.process_update(update))
+    loop.create_task(tg_app.process_update(update))
     return "OK", 200
-
 
 # ==========================
 # Запуск на Render
 # ==========================
 if __name__ == "__main__":
-    import asyncio
     async def set_webhook():
         await tg_app.initialize()
-        await tg_app.start()
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
-    asyncio.get_event_loop().run_until_complete(set_webhook())
+
+    loop.run_until_complete(set_webhook())
     app.run(host="0.0.0.0", port=PORT)
