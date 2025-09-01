@@ -211,9 +211,9 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    loop = asyncio.get_event_loop()
-    loop.create_task(tg_app.process_update(update))
+    tg_app.update_queue.put_nowait(update)
     return "OK", 200
+
 
 
 # ==========================
