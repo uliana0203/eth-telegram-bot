@@ -1,0 +1,10 @@
+# Ігнорувати .env
+.env
+
+# Python кеш
+__pycache__/
+*.pyc
+
+# IDE файли
+.vscode/
+.idea/
