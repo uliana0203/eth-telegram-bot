@@ -204,7 +204,7 @@ tg_app.add_handler(CommandHandler("now", cmd_start))
 def home():
     return "Bot is running!", 200
 
-@app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
+@app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
     tg_app.update_queue.put_nowait(update)
@@ -216,7 +216,7 @@ def webhook():
 if __name__ == "__main__":
     import asyncio
     async def set_webhook():
-        await tg_app.bot.set_webhook(url=f"{BASE_URL}/{TELEGRAM_BOT_TOKEN}")
+        await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
     asyncio.get_event_loop().run_until_complete(set_webhook())
 
     app.run(host="0.0.0.0", port=PORT)
