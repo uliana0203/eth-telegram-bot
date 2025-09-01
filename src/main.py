@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+import logging
 from datetime import datetime
 from pytz import timezone
 from dotenv import load_dotenv
@@ -21,6 +22,8 @@ KYIV_TZ = timezone("Europe/Kyiv")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Вкажи TELEGRAM_BOT_TOKEN у змінних середовища або .env")
+
+logging.basicConfig(level=logging.INFO)
 
 # ==========================
 # Утиліти
@@ -205,10 +208,13 @@ def home():
     return "Bot is running!", 200
 
 @app.route("/webhook", methods=["POST"])
-def webhook():
+async def webhook():
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    # Кидаємо update у внутрішню чергу Application
-    tg_app.update_queue.put_nowait(update)
+    logging.info(f"Got update: {update}")
+    if not tg_app.running:
+        await tg_app.initialize()
+        await tg_app.start()
+    await tg_app.process_update(update)
     return "OK", 200
 
 # ==========================
@@ -218,7 +224,7 @@ if __name__ == "__main__":
     import asyncio
     async def set_webhook():
         await tg_app.initialize()
+        await tg_app.start()
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
     asyncio.get_event_loop().run_until_complete(set_webhook())
-
     app.run(host="0.0.0.0", port=PORT)
