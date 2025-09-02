@@ -125,6 +125,8 @@ def fetch_text(url: str) -> str:
 
 def parse_eth_farside_yesterday(txt: str):
     lines = [l.strip() for l in txt.splitlines() if l.strip()]
+
+    # шукаємо фонди
     si = lines.index("Blackrock")
     fund_names = lines[si:si+9]
 
@@ -134,12 +136,14 @@ def parse_eth_farside_yesterday(txt: str):
 
     labels = [f"{n} ({t})" for n, t in zip(fund_names, tickers)] + ["Total"]
 
-    val_token = re.compile(r"\(?\d[\d,]*\.?\d*\)?|-$")
+    val_token = re.compile(r"\(?-?\d[\d,]*\.?\d*\)?|-$")
+
     def parse_val(s: str) -> float:
         s = s.strip()
-        if s == "-": return 0.0
+        if s == "-":
+            return 0.0
         neg = s.startswith("(") and s.endswith(")")
-        v = float(s.strip("()").replace(",", "")) if s.strip("()") else 0.0
+        v = float(s.strip("()").replace(",", ""))
         return -v if neg else v
 
     date_pat = re.compile(r"^\d{1,2} [A-Z][a-z]{2} \d{4}$")
@@ -150,8 +154,19 @@ def parse_eth_farside_yesterday(txt: str):
             if len(vals) == 10 and all(val_token.fullmatch(v) for v in vals):
                 blocks.append((i, l, vals))
 
-    y_idx, date_y, vals_y_raw = blocks[-1]
-    p_idx, date_p, vals_p_raw = blocks[-2]
+    if len(blocks) < 2:
+        raise ValueError("Недостатньо дат з даними.")
+
+    # беремо лише ті блоки, де є реальні дані (не всі "-")
+    def has_real_fund_data(vals):
+        return any(v.strip() not in ["-", "0"] for v in vals[:9])
+
+    real_blocks = [(i, d, vals) for (i, d, vals) in blocks if has_real_fund_data(vals)]
+    if len(real_blocks) < 2:
+        raise ValueError("Немає двох днів з реальними даними.")
+
+    y_idx, date_y, vals_y_raw = real_blocks[-1]
+    p_idx, date_p, vals_p_raw = real_blocks[-2]
 
     vals_y = [parse_val(v) for v in vals_y_raw]
     vals_p = [parse_val(v) for v in vals_p_raw]
@@ -159,8 +174,18 @@ def parse_eth_farside_yesterday(txt: str):
     out = []
     for label, vy, vp in zip(labels, vals_y, vals_p):
         diff = vy - vp
-        sign = "+" if diff >= 0 else ""
-        out.append(f"{label}: {vy:.1f} ({sign}{diff:.1f})")
+        if vy > 0:
+            status = "приплив"
+        elif vy < 0:
+            status = "відтік"
+        else:
+            status = "без змін"
+
+        if status == "без змін":
+            out.append(f"{label}: {vy:.1f} млн $ ({status})")
+        else:
+            sign = "+" if diff >= 0 else "–"
+            out.append(f"{label}: {vy:.1f} млн $ ({status}, {sign}{abs(diff):.1f} vs учора)")
 
     return date_y, date_p, out
 
