@@ -1,11 +1,13 @@
 import os
 import re
+import time
 import requests
 from datetime import datetime
 from pytz import timezone
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 import cloudscraper
+
 from fastapi import FastAPI, Request
 import uvicorn
 
@@ -47,47 +49,61 @@ def pct_delta(new, old):
         return "N/A"
 
 # ==========================
-# CoinGecko (обов’язково кешувати!)
+# CoinGecko з кешем
 # ==========================
 CG_BASE = "https://api.coingecko.com/api/v3"
 HEADERS_JSON = {"accept": "application/json"}
-_last_price_cache = None
-_last_price_time = None
+
+_last_fetch = {"ts": 0, "data": None}
 
 def get_eth_price_and_volume():
-    import time
-    global _last_price_cache, _last_price_time
+    global _last_fetch
     now = time.time()
 
-    # кешуємо на 60 секунд, щоб уникнути 429
-    if _last_price_cache and _last_price_time and now - _last_price_time < 60:
-        return _last_price_cache
+    # якщо є кеш молодший за 60 сек
+    if now - _last_fetch["ts"] < 60 and _last_fetch["data"] is not None:
+        return _last_fetch["data"]
 
-    r = requests.get(
-        f"{CG_BASE}/coins/ethereum",
-        params={"localization":"false","tickers":"false","market_data":"true",
-                "community_data":"false","developer_data":"false","sparkline":"false"},
-        headers=HEADERS_JSON, timeout=20
-    )
-    r.raise_for_status()
-    data = r.json()
-    price = float(data["market_data"]["current_price"]["usd"])
-    vol_24h = float(data["market_data"]["total_volume"]["usd"])
-    price_chg_pct = float(data["market_data"]["price_change_percentage_24h"])
+    try:
+        r = requests.get(
+            f"{CG_BASE}/coins/ethereum",
+            params={
+                "localization": "false",
+                "tickers": "false",
+                "market_data": "true",
+                "community_data": "false",
+                "developer_data": "false",
+                "sparkline": "false"
+            },
+            headers=HEADERS_JSON,
+            timeout=20
+        )
+        r.raise_for_status()
+        data = r.json()
 
-    r2 = requests.get(
-        f"{CG_BASE}/coins/ethereum/market_chart",
-        params={"vs_currency":"usd","days":"2","interval":"daily"},
-        headers=HEADERS_JSON, timeout=20
-    )
-    r2.raise_for_status()
-    vols = r2.json().get("total_volumes", [])
-    vol_prev = vols[-2][1] if len(vols) >= 2 else None
-    vol_delta_pct = pct_delta(vol_24h, vol_prev)
+        price = float(data["market_data"]["current_price"]["usd"])
+        vol_24h = float(data["market_data"]["total_volume"]["usd"])
+        price_chg_pct = float(data["market_data"]["price_change_percentage_24h"])
 
-    _last_price_cache = (price, vol_24h, price_chg_pct, vol_delta_pct)
-    _last_price_time = now
-    return _last_price_cache
+        r2 = requests.get(
+            f"{CG_BASE}/coins/ethereum/market_chart",
+            params={"vs_currency": "usd", "days": "2", "interval": "daily"},
+            headers=HEADERS_JSON,
+            timeout=20
+        )
+        vols = r2.json().get("total_volumes", [])
+        vol_prev = vols[-2][1] if len(vols) >= 2 else None
+        vol_delta_pct = pct_delta(vol_24h, vol_prev)
+
+        result = (price, vol_24h, price_chg_pct, vol_delta_pct)
+        _last_fetch = {"ts": now, "data": result}
+        return result
+
+    except Exception as e:
+        if _last_fetch["data"]:
+            return _last_fetch["data"]
+        else:
+            raise e
 
 # ==========================
 # Farside
@@ -233,7 +249,8 @@ if __name__ == "__main__":
     async def main():
         await tg_app.initialize()
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
-        await tg_app.start()
+        print("Webhook set!")
+
         config = uvicorn.Config(app, host="0.0.0.0", port=PORT)
         server = uvicorn.Server(config)
         await server.serve()
