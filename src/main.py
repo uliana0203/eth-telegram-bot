@@ -1,16 +1,16 @@
 import os
 import re
-import time
 import requests
 from datetime import datetime
 from pytz import timezone
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 import cloudscraper
+from fastapi import FastAPI, Request
+import uvicorn
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from flask import Flask, request
-import asyncio
 
 # ==========================
 # Конфіг
@@ -47,18 +47,21 @@ def pct_delta(new, old):
         return "N/A"
 
 # ==========================
-# CoinGecko (з кешем)
+# CoinGecko (обов’язково кешувати!)
 # ==========================
 CG_BASE = "https://api.coingecko.com/api/v3"
 HEADERS_JSON = {"accept": "application/json"}
-
-last_fetch = 0
-cache_data = None
+_last_price_cache = None
+_last_price_time = None
 
 def get_eth_price_and_volume():
-    global last_fetch, cache_data
-    if time.time() - last_fetch < 60 and cache_data:
-        return cache_data
+    import time
+    global _last_price_cache, _last_price_time
+    now = time.time()
+
+    # кешуємо на 60 секунд, щоб уникнути 429
+    if _last_price_cache and _last_price_time and now - _last_price_time < 60:
+        return _last_price_cache
 
     r = requests.get(
         f"{CG_BASE}/coins/ethereum",
@@ -82,9 +85,9 @@ def get_eth_price_and_volume():
     vol_prev = vols[-2][1] if len(vols) >= 2 else None
     vol_delta_pct = pct_delta(vol_24h, vol_prev)
 
-    cache_data = (price, vol_24h, price_chg_pct, vol_delta_pct)
-    last_fetch = time.time()
-    return cache_data
+    _last_price_cache = (price, vol_24h, price_chg_pct, vol_delta_pct)
+    _last_price_time = now
+    return _last_price_cache
 
 # ==========================
 # Farside
@@ -197,9 +200,9 @@ def build_message():
     return f"{header}\n{line1}\n{line2}\n{line3}\n{footer}"
 
 # ==========================
-# Telegram + Flask
+# Telegram + FastAPI
 # ==========================
-app = Flask(__name__)
+app = FastAPI()
 tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,27 +214,28 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 tg_app.add_handler(CommandHandler("start", cmd_start))
 tg_app.add_handler(CommandHandler("now", cmd_start))
 
-@app.route("/")
-def home():
-    return "Bot is running!", 200
+@app.get("/")
+async def home():
+    return {"status": "Bot is running!"}
 
-# Один глобальний loop
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    loop.create_task(tg_app.process_update(update))
-    return "OK", 200
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.process_update(update)
+    return {"ok": True}
 
 # ==========================
 # Запуск на Render
 # ==========================
 if __name__ == "__main__":
-    async def set_webhook():
+    import asyncio
+    async def main():
         await tg_app.initialize()
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
+        await tg_app.start()
+        config = uvicorn.Config(app, host="0.0.0.0", port=PORT)
+        server = uvicorn.Server(config)
+        await server.serve()
 
-    loop.run_until_complete(set_webhook())
-    app.run(host="0.0.0.0", port=PORT)
+    asyncio.run(main())
