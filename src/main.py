@@ -60,50 +60,43 @@ def get_eth_price_and_volume():
     global _last_fetch
     now = time.time()
 
-    # якщо є кеш молодший за 60 сек
+    # кеш на 60 секунд
     if now - _last_fetch["ts"] < 60 and _last_fetch["data"] is not None:
         return _last_fetch["data"]
 
-    try:
-        r = requests.get(
-            f"{CG_BASE}/coins/ethereum",
-            params={
-                "localization": "false",
-                "tickers": "false",
-                "market_data": "true",
-                "community_data": "false",
-                "developer_data": "false",
-                "sparkline": "false"
-            },
-            headers=HEADERS_JSON,
-            timeout=20
-        )
-        r.raise_for_status()
-        data = r.json()
+    r = requests.get(
+        f"{CG_BASE}/coins/ethereum",
+        params={
+            "localization": "false",
+            "tickers": "false",
+            "market_data": "true",
+            "community_data": "false",
+            "developer_data": "false",
+            "sparkline": "false"
+        },
+        headers=HEADERS_JSON,
+        timeout=20
+    )
+    r.raise_for_status()
+    data = r.json()
 
-        price = float(data["market_data"]["current_price"]["usd"])
-        vol_24h = float(data["market_data"]["total_volume"]["usd"])
-        price_chg_pct = float(data["market_data"]["price_change_percentage_24h"])
+    price = float(data["market_data"]["current_price"]["usd"])
+    vol_24h = float(data["market_data"]["total_volume"]["usd"])
+    price_chg_pct = float(data["market_data"]["price_change_percentage_24h"])
 
-        r2 = requests.get(
-            f"{CG_BASE}/coins/ethereum/market_chart",
-            params={"vs_currency": "usd", "days": "2", "interval": "daily"},
-            headers=HEADERS_JSON,
-            timeout=20
-        )
-        vols = r2.json().get("total_volumes", [])
-        vol_prev = vols[-2][1] if len(vols) >= 2 else None
-        vol_delta_pct = pct_delta(vol_24h, vol_prev)
+    r2 = requests.get(
+        f"{CG_BASE}/coins/ethereum/market_chart",
+        params={"vs_currency": "usd", "days": "2", "interval": "daily"},
+        headers=HEADERS_JSON,
+        timeout=20
+    )
+    vols = r2.json().get("total_volumes", [])
+    vol_prev = vols[-2][1] if len(vols) >= 2 else None
+    vol_delta_pct = pct_delta(vol_24h, vol_prev)
 
-        result = (price, vol_24h, price_chg_pct, vol_delta_pct)
-        _last_fetch = {"ts": now, "data": result}
-        return result
-
-    except Exception as e:
-        if _last_fetch["data"]:
-            return _last_fetch["data"]
-        else:
-            raise e
+    result = (price, vol_24h, price_chg_pct, vol_delta_pct)
+    _last_fetch = {"ts": now, "data": result}
+    return result
 
 # ==========================
 # Farside
@@ -132,25 +125,12 @@ def fetch_text(url: str) -> str:
 def parse_eth_farside_yesterday(txt: str):
     lines = [l.strip() for l in txt.splitlines() if l.strip()]
 
-    try:
-        si = lines.index("Blackrock")
-    except ValueError:
-        raise ValueError("Не знайдено 'Blackrock' у таблиці.")
-
+    si = lines.index("Blackrock")
     fund_names = lines[si:si+9]
 
-    try:
-        fee_i = lines.index("Fee", si)
-    except ValueError:
-        raise ValueError("Не знайдено 'Fee' після фондів.")
-
-    tickers = []
-    for x in lines[si+10:fee_i]:
-        if re.fullmatch(r"[A-Z]{3,6}\*?", x):
-            tickers.append(x)
+    fee_i = lines.index("Fee", si)
+    tickers = [x for x in lines[si+10:fee_i] if re.fullmatch(r"[A-Z]{3,6}\*?", x)]
     tickers = tickers[:9]
-    if len(tickers) != 9:
-        raise ValueError(f"Очікувалось 9 тікерів, знайдено: {tickers}")
 
     labels = [f"{n} ({t})" for n, t in zip(fund_names, tickers)] + ["Total"]
 
@@ -170,18 +150,8 @@ def parse_eth_farside_yesterday(txt: str):
             if len(vals) == 10 and all(val_token.fullmatch(v) for v in vals):
                 blocks.append((i, l, vals))
 
-    if len(blocks) < 2:
-        raise ValueError("Недостатньо дат з даними.")
-
-    def has_real_fund_data(vals):
-        return any(v.strip() != "-" for v in vals[:9])
-
-    real_blocks = [(i, d, vals) for (i, d, vals) in blocks if has_real_fund_data(vals)]
-    if len(real_blocks) < 2:
-        raise ValueError("Немає двох днів з реальними даними.")
-
-    y_idx, date_y, vals_y_raw = real_blocks[-1]
-    p_idx, date_p, vals_p_raw = real_blocks[-2]
+    y_idx, date_y, vals_y_raw = blocks[-1]
+    p_idx, date_p, vals_p_raw = blocks[-2]
 
     vals_y = [parse_val(v) for v in vals_y_raw]
     vals_p = [parse_val(v) for v in vals_p_raw]
@@ -246,13 +216,17 @@ async def webhook(request: Request):
 # ==========================
 if __name__ == "__main__":
     import asyncio
+
     async def main():
         await tg_app.initialize()
+        await tg_app.start()   # 🔑 Додано запуск Application
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
         print("Webhook set!")
 
         config = uvicorn.Config(app, host="0.0.0.0", port=PORT)
         server = uvicorn.Server(config)
         await server.serve()
+
+        await tg_app.stop()   # 🔑 Коректна зупинка
 
     asyncio.run(main())
