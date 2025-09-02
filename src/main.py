@@ -54,49 +54,50 @@ def pct_delta(new, old):
 CG_BASE = "https://api.coingecko.com/api/v3"
 HEADERS_JSON = {"accept": "application/json"}
 
-_last_fetch = {"ts": 0, "data": None}
+_last_fetch = {"ts": 0, "data": None, "error": None}
 
 def get_eth_price_and_volume():
     global _last_fetch
     now = time.time()
 
-    # кеш на 60 секунд
-    if now - _last_fetch["ts"] < 60 and _last_fetch["data"] is not None:
+    # кеш 5 хвилин
+    if now - _last_fetch["ts"] < 300 and (_last_fetch["data"] or _last_fetch["error"]):
+        if _last_fetch["error"]:
+            raise RuntimeError(_last_fetch["error"])
         return _last_fetch["data"]
 
-    r = requests.get(
-        f"{CG_BASE}/coins/ethereum",
-        params={
-            "localization": "false",
-            "tickers": "false",
-            "market_data": "true",
-            "community_data": "false",
-            "developer_data": "false",
-            "sparkline": "false"
-        },
-        headers=HEADERS_JSON,
-        timeout=20
-    )
-    r.raise_for_status()
-    data = r.json()
+    try:
+        r = requests.get(
+            f"{CG_BASE}/coins/ethereum",
+            params={
+                "localization": "false",
+                "tickers": "false",
+                "market_data": "true",
+                "community_data": "false",
+                "developer_data": "false",
+                "sparkline": "false"
+            },
+            headers=HEADERS_JSON,
+            timeout=20
+        )
+        r.raise_for_status()
+        data = r.json()
 
-    price = float(data["market_data"]["current_price"]["usd"])
-    vol_24h = float(data["market_data"]["total_volume"]["usd"])
-    price_chg_pct = float(data["market_data"]["price_change_percentage_24h"])
+        price = float(data["market_data"]["current_price"]["usd"])
+        vol_24h = float(data["market_data"]["total_volume"]["usd"])
+        price_chg_pct = float(data["market_data"]["price_change_percentage_24h"])
 
-    r2 = requests.get(
-        f"{CG_BASE}/coins/ethereum/market_chart",
-        params={"vs_currency": "usd", "days": "2", "interval": "daily"},
-        headers=HEADERS_JSON,
-        timeout=20
-    )
-    vols = r2.json().get("total_volumes", [])
-    vol_prev = vols[-2][1] if len(vols) >= 2 else None
-    vol_delta_pct = pct_delta(vol_24h, vol_prev)
+        # CoinGecko не дає попередній обсяг напряму → залишимо N/A
+        vol_delta_pct = "N/A"
 
-    result = (price, vol_24h, price_chg_pct, vol_delta_pct)
-    _last_fetch = {"ts": now, "data": result}
-    return result
+        result = (price, vol_24h, price_chg_pct, vol_delta_pct)
+        _last_fetch = {"ts": now, "data": result, "error": None}
+        return result
+
+    except Exception as e:
+        err_msg = f"CoinGecko недоступний: {e}"
+        _last_fetch = {"ts": now, "data": None, "error": err_msg}
+        raise RuntimeError(err_msg)
 
 # ==========================
 # Farside
@@ -124,7 +125,6 @@ def fetch_text(url: str) -> str:
 
 def parse_eth_farside_yesterday(txt: str):
     lines = [l.strip() for l in txt.splitlines() if l.strip()]
-
     si = lines.index("Blackrock")
     fund_names = lines[si:si+9]
 
@@ -139,7 +139,7 @@ def parse_eth_farside_yesterday(txt: str):
         s = s.strip()
         if s == "-": return 0.0
         neg = s.startswith("(") and s.endswith(")")
-        v = float(s.strip("()").replace(",", ""))
+        v = float(s.strip("()").replace(",", "")) if s.strip("()") else 0.0
         return -v if neg else v
 
     date_pat = re.compile(r"^\d{1,2} [A-Z][a-z]{2} \d{4}$")
@@ -168,7 +168,13 @@ def parse_eth_farside_yesterday(txt: str):
 # Формування повідомлення
 # ==========================
 def build_message():
-    price, vol, price_chg_pct, vol_delta_pct = get_eth_price_and_volume()
+    try:
+        price, vol, price_chg_pct, vol_delta_pct = get_eth_price_and_volume()
+        line1 = f"1) Ціна: ${price:,.2f} ({'+' if price_chg_pct >= 0 else ''}{price_chg_pct:.2f}%)"
+        line2 = f"2) Об'єм (24h): {fmt_money(vol)} ({vol_delta_pct})"
+    except Exception as e:
+        line1 = "1) CoinGecko недоступний"
+        line2 = str(e)
 
     try:
         txt = fetch_text(FARSIDE_URL)
@@ -177,9 +183,6 @@ def build_message():
         line3 = f"3) Великі фонди (spot ETH ETF — {dy} vs {dp}):\n{funds_block}"
     except Exception as e:
         line3 = f"3) Великі фонди (spot ETH ETF): N/A — {e}"
-
-    line1 = f"1) Ціна: ${price:,.2f} ({'+' if price_chg_pct >= 0 else ''}{price_chg_pct:.2f}%)"
-    line2 = f"2) Об'єм (24h): {fmt_money(vol)} ({vol_delta_pct})"
 
     header = f"ETH звіт — {now_str()} (Kyiv)"
     footer = "Джерела: CoinGecko, Farside."
@@ -219,7 +222,7 @@ if __name__ == "__main__":
 
     async def main():
         await tg_app.initialize()
-        await tg_app.start()   # 🔑 Додано запуск Application
+        await tg_app.start()
         await tg_app.bot.set_webhook(url=f"{BASE_URL}/webhook")
         print("Webhook set!")
 
@@ -227,6 +230,6 @@ if __name__ == "__main__":
         server = uvicorn.Server(config)
         await server.serve()
 
-        await tg_app.stop()   # 🔑 Коректна зупинка
+        await tg_app.stop()
 
     asyncio.run(main())
