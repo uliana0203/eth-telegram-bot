@@ -1,4 +1,4 @@
-# 🪙 ETH Telegram Bot — Ethereum ETF & Market Report
+# 🪙 ETH Telegram Bot - Ethereum ETF & Market Report
 
 This project is a **Telegram bot** that sends concise, real-time reports on the Ethereum market.  
 It combines live data from **CoinGecko** (price, 24h volume, change) and **Farside** (ETF inflows/outflows), caches responses, and delivers formatted updates directly in Telegram.
